@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/patrickmn/go-cache"
 	"log"
 	"time"
 
@@ -27,6 +28,14 @@ func NewService() *Service {
 }
 
 func (s *Service) Translate(ctx context.Context, from, to language.Tag, data string) (string, error) {
+	cacheKey := createTranslatorCacheKey(from, to, data)
+	cacheValue, found := memoryCache.Get(cacheKey)
+
+	if found {
+		// cache hit - value found from the cache
+		return cacheValue.(string), nil
+	}
+
 	var translatorError error
 	var translatorValue string
 
@@ -49,5 +58,9 @@ func (s *Service) Translate(ctx context.Context, from, to language.Tag, data str
 		log.Fatalf("error after retrying: %v", err)
 	}
 
+	if translatorError == nil {
+		// set the value in cache
+		memoryCache.Set(createTranslatorCacheKey(from, to, data), translatorValue, cache.NoExpiration)
+	}
 	return translatorValue, translatorError
 }
