@@ -21,7 +21,7 @@ type Service struct {
 func NewService() *Service {
 	// creating memory cache with no expiration and no clean up size
 	memoryCache = cache.New(cache.NoExpiration, cache.NoExpiration)
-	dt = NewDeduplicator()
+	dt = NewDeDuplicator()
 
 	t := newRandomTranslator(
 		100*time.Millisecond,
@@ -60,23 +60,22 @@ func (s *Service) Translate(ctx context.Context, from, to language.Tag, data str
 	exponentialBackoff.MaxElapsedTime = 15 * time.Second
 	maxRetriesBackoff := backoff.WithMaxRetries(exponentialBackoff, maxRetries)
 
-	deduplicatorKey := createTranslatorDeduplicateKey(from, to, data)
+	deDuplicatorKey := createTranslatorDeduplicateKey(from, to, data)
 	dt.resourceSynchronizer.L.Lock()
-	for dt.requestMap[deduplicatorKey] == true {
+	for dt.requestMap[deDuplicatorKey] == true {
 		dt.resourceSynchronizer.Wait()
-		//runtime.Gosched()
 	}
 	dt.resourceSynchronizer.L.Unlock()
 
 	dt.resourceSynchronizer.L.Lock()
-	dt.requestMap[deduplicatorKey] = true
+	dt.requestMap[deDuplicatorKey] = true
 	dt.resourceSynchronizer.Broadcast()
 	dt.resourceSynchronizer.L.Unlock()
 
 	err := backoff.RetryNotify(retryable, maxRetriesBackoff, notify)
 
 	dt.resourceSynchronizer.L.Lock()
-	dt.requestMap[deduplicatorKey] = false
+	dt.requestMap[deDuplicatorKey] = false
 	dt.resourceSynchronizer.Broadcast()
 	dt.resourceSynchronizer.L.Unlock()
 
