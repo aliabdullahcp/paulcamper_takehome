@@ -10,12 +10,19 @@ import (
 	"golang.org/x/text/language"
 )
 
+var memoryCache *cache.Cache
+var dt *deDuplicator
+
 // Service is a Translator user.
 type Service struct {
 	translator Translator
 }
 
 func NewService() *Service {
+	// creating memory cache with no expiration and no clean up size
+	memoryCache = cache.New(cache.NoExpiration, cache.NoExpiration)
+	dt = NewDeduplicator()
+
 	t := newRandomTranslator(
 		100*time.Millisecond,
 		500*time.Millisecond,
@@ -51,9 +58,28 @@ func (s *Service) Translate(ctx context.Context, from, to language.Tag, data str
 	var maxRetries uint64 = 5
 	exponentialBackoff := backoff.NewExponentialBackOff()
 	exponentialBackoff.MaxElapsedTime = 15 * time.Second
-
 	maxRetriesBackoff := backoff.WithMaxRetries(exponentialBackoff, maxRetries)
+
+	deduplicatorKey := createTranslatorDeduplicateKey(from, to, data)
+	dt.resourceSynchronizer.L.Lock()
+	for dt.requestMap[deduplicatorKey] == true {
+		dt.resourceSynchronizer.Wait()
+		//runtime.Gosched()
+	}
+	dt.resourceSynchronizer.L.Unlock()
+
+	dt.resourceSynchronizer.L.Lock()
+	dt.requestMap[deduplicatorKey] = true
+	dt.resourceSynchronizer.Broadcast()
+	dt.resourceSynchronizer.L.Unlock()
+
 	err := backoff.RetryNotify(retryable, maxRetriesBackoff, notify)
+
+	dt.resourceSynchronizer.L.Lock()
+	dt.requestMap[deduplicatorKey] = false
+	dt.resourceSynchronizer.Broadcast()
+	dt.resourceSynchronizer.L.Unlock()
+
 	if err != nil {
 		log.Fatalf("error after retrying: %v", err)
 	}
