@@ -10,19 +10,14 @@ import (
 	"golang.org/x/text/language"
 )
 
-var memoryCache *cache.Cache
-var dt *deDuplicator
-
 // Service is a Translator user.
 type Service struct {
-	translator Translator
+	translator  Translator
+	memoryCache *cache.Cache
+	dt          *deDuplicator
 }
 
 func NewService() *Service {
-	// creating memory cache with no expiration and no clean up size
-	memoryCache = cache.New(cache.NoExpiration, cache.NoExpiration)
-	dt = NewDeDuplicator()
-
 	t := newRandomTranslator(
 		100*time.Millisecond,
 		500*time.Millisecond,
@@ -30,13 +25,15 @@ func NewService() *Service {
 	)
 
 	return &Service{
-		translator: t,
+		translator:  t,
+		memoryCache: cache.New(cache.NoExpiration, cache.NoExpiration),
+		dt:          NewDeDuplicator(),
 	}
 }
 
 func (s *Service) Translate(ctx context.Context, from, to language.Tag, data string) (string, error) {
 	cacheKey := createTranslatorCacheKey(from, to, data)
-	cacheValue, found := memoryCache.Get(cacheKey)
+	cacheValue, found := s.memoryCache.Get(cacheKey)
 
 	if found {
 		// cache hit - value found from the cache
@@ -61,23 +58,23 @@ func (s *Service) Translate(ctx context.Context, from, to language.Tag, data str
 	maxRetriesBackoff := backoff.WithMaxRetries(exponentialBackoff, maxRetries)
 
 	deDuplicatorKey := createTranslatorDeduplicateKey(from, to, data)
-	dt.resourceSynchronizer.L.Lock()
-	for dt.requestMap[deDuplicatorKey] == true {
-		dt.resourceSynchronizer.Wait()
+	s.dt.resourceSynchronizer.L.Lock()
+	for s.dt.requestMap[deDuplicatorKey] == true {
+		s.dt.resourceSynchronizer.Wait()
 	}
-	dt.resourceSynchronizer.L.Unlock()
+	s.dt.resourceSynchronizer.L.Unlock()
 
-	dt.resourceSynchronizer.L.Lock()
-	dt.requestMap[deDuplicatorKey] = true
-	dt.resourceSynchronizer.Broadcast()
-	dt.resourceSynchronizer.L.Unlock()
+	s.dt.resourceSynchronizer.L.Lock()
+	s.dt.requestMap[deDuplicatorKey] = true
+	s.dt.resourceSynchronizer.Broadcast()
+	s.dt.resourceSynchronizer.L.Unlock()
 
 	err := backoff.RetryNotify(retryable, maxRetriesBackoff, notify)
 
-	dt.resourceSynchronizer.L.Lock()
-	dt.requestMap[deDuplicatorKey] = false
-	dt.resourceSynchronizer.Broadcast()
-	dt.resourceSynchronizer.L.Unlock()
+	s.dt.resourceSynchronizer.L.Lock()
+	s.dt.requestMap[deDuplicatorKey] = false
+	s.dt.resourceSynchronizer.Broadcast()
+	s.dt.resourceSynchronizer.L.Unlock()
 
 	if err != nil {
 		log.Fatalf("error after retrying: %v", err)
@@ -85,7 +82,7 @@ func (s *Service) Translate(ctx context.Context, from, to language.Tag, data str
 
 	if translatorError == nil {
 		// set the value in cache
-		memoryCache.Set(createTranslatorCacheKey(from, to, data), translatorValue, cache.NoExpiration)
+		s.memoryCache.Set(createTranslatorCacheKey(from, to, data), translatorValue, cache.NoExpiration)
 	}
 	return translatorValue, translatorError
 }
